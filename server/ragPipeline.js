@@ -47,17 +47,40 @@ async function searchKnowledge(queryEmbedding, limit = 8) {
 }
 
 function stripArtifacts(text) {
-  return (text || '')
+  if (!text) return '';
+
+  return text
     .replace(/https?:\/\/[^\s]+/g, '')
     .replace(/www\.[^\s]+/g, '')
-    .replace(/[{}_\\|<>]{2,}/g, '')
+    .replace(/[¶§†‡•·◆▪]/g, '')           // OCR special symbols
+    .replace(/[{}_\\|<>]{2,}/g, ' ')
+    .replace(/\f/g, '\n')
     .split('\n')
-    .filter(line => {
+    .map(line => {
       const t = line.trim();
-      if (!t) return true;
+      if (!t) return '';
+
+      // If the line has a readable "Narrated ..." segment, rescue it from garbage prefix
+      const narratedIdx = t.indexOf('Narrated ');
+      if (narratedIdx > 10) return t.substring(narratedIdx);
+
+      const words = t.split(/\s+/);
       const letters = (t.match(/[a-zA-Z؀-ۿ]/g) || []).length;
-      return letters / t.length > 0.25;
+
+      // Basic letter-ratio gate
+      if (letters / t.length < 0.3) return '';
+
+      // More than 60% of words are ≤2 letters → OCR garbage line
+      const shortWords = words.filter(w => w.replace(/[^a-zA-Z]/g, '').length <= 2);
+      if (words.length >= 5 && shortWords.length / words.length > 0.6) return '';
+
+      // Many isolated uppercase letters in a short line → garbled transliteration
+      const isolatedCaps = (t.match(/\b[A-Z]{1,2}\b/g) || []).length;
+      if (isolatedCaps >= 4 && t.length < 90) return '';
+
+      return t;
     })
+    .filter(l => l !== '')
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
@@ -178,11 +201,13 @@ ${sizeInstructions[responseSize]}
 Rules you must always follow:
 1. Use ONLY the sources provided below. Never invent information.
 2. Always cite your sources: Quran as (Surah Name Chapter:Verse), Hadith as (Book #Number).
-3. Write in a friendly, easy-to-understand way. Imagine explaining to a 15-year-old. Avoid religious jargon — if you use an Islamic term, explain what it means.
-4. Never be judgmental. Teenagers come with honest questions — treat them with respect.
-5. Only say "For a personal fatwa (religious ruling), please ask a qualified scholar" if the question is specifically asking for a legal ruling about a personal situation. For all general knowledge questions, answer fully.
-6. ${langRule}
-7. Format your answer using these section headers (only include sections relevant to your response size):
+3. Write in simple, plain English. Short sentences. Everyday words. No jargon — if you must use an Islamic term, immediately explain what it means in brackets.
+4. When quoting a Hadith, FIRST give the full clean English text of what the Prophet ﷺ said or did, THEN explain what it means in 1-2 sentences. Never show garbled or partial text.
+5. When quoting a Quran verse, quote it cleanly then explain what it means in simple words.
+6. Never be judgmental. Teenagers come with honest questions — treat them with respect.
+7. Only say "For a personal fatwa (religious ruling), please ask a qualified scholar" if the question is specifically asking for a legal ruling about a personal situation. For all general knowledge questions, answer fully.
+8. ${langRule}
+9. Format your answer using these section headers (only include sections relevant to your response size):
 
 [Direct Answer]
 [Quranic Evidence]

@@ -13,19 +13,39 @@ function containsArabic(text: string) {
   return /[؀-ۿ]/.test(text);
 }
 
-/** Remove PDF artifacts: URLs, garbled OCR lines, excessive special chars */
+/** Remove PDF OCR garbage — URLs, garbled lines, isolated-cap fragments */
 function cleanText(raw: string): string {
+  if (!raw) return '';
   return raw
     .replace(/https?:\/\/[^\s]+/g, '')
     .replace(/www\.[^\s]+/g, '')
-    .replace(/[{}_\\|<>]{2,}/g, '')
+    .replace(/[¶§†‡•·◆▪]/g, '')
+    .replace(/[{}_\\|<>]{2,}/g, ' ')
     .split('\n')
-    .filter(line => {
+    .map(line => {
       const t = line.trim();
-      if (!t) return true;
+      if (!t) return '';
+
+      // Rescue "Narrated ..." from a garbage-prefixed line
+      const narratedIdx = t.indexOf('Narrated ');
+      if (narratedIdx > 10) return t.substring(narratedIdx);
+
+      const words = t.split(/\s+/);
       const letters = (t.match(/[a-zA-Z؀-ۿ]/g) || []).length;
-      return letters / t.length > 0.28;
+
+      if (letters / t.length < 0.3) return '';
+
+      // >60% of words are ≤2 letters → OCR garbage
+      const shortWords = words.filter(w => w.replace(/[^a-zA-Z]/g, '').length <= 2);
+      if (words.length >= 5 && shortWords.length / words.length > 0.6) return '';
+
+      // Many isolated caps in a short line → garbled transliteration
+      const isolatedCaps = (t.match(/\b[A-Z]{1,2}\b/g) || []).length;
+      if (isolatedCaps >= 4 && t.length < 90) return '';
+
+      return t;
     })
+    .filter(l => l !== '')
     .join('\n')
     .replace(/\n{3,}/g, '\n\n')
     .trim();
