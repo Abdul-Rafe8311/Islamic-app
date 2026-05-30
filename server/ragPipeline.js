@@ -83,37 +83,55 @@ function buildContext(sources) {
     .join('\n\n');
 }
 
-function parseAnswer(rawAnswer, sources) {
+function parseAnswer(rawAnswer, sources, quranRefs = []) {
+  // refByIndex maps context position (1-based) → Claude's identified surah/verse
+  const refByIndex = {};
+  for (const r of quranRefs) {
+    if (r && r.index) refByIndex[r.index] = r;
+  }
+
+  // Tag every source with its 1-based context position BEFORE any filtering
+  const tagged = sources.map((s, i) => ({ ...s, _ctxIdx: i + 1 }));
+
   const seenQuran = new Set();
-  const quran_sources = sources
-    .filter(s => s.source_type === 'quran')
+  const quran_sources = tagged
     .filter(s => {
-      const key = `${s.metadata?.surah_number}:${s.metadata?.ayah_number}`;
+      if (s.source_type !== 'quran') return false;
+      // Deduplicate: use context index as fallback key when DB has no metadata
+      const key = `${s.metadata?.surah_number || s._ctxIdx}:${s.metadata?.ayah_number || 0}`;
       if (seenQuran.has(key)) return false;
       seenQuran.add(key);
       return true;
     })
-    .map(s => ({
-      surah_name: s.metadata?.surah_name || '',
-      chapter: s.metadata?.surah_number || 0,
-      verse: s.metadata?.ayah_number || 0,
-      text: stripArtifacts(s.content),
-      arabic_text: s.metadata?.arabic_text || '',
-    }));
+    .map(s => {
+      const dbName    = s.metadata?.surah_name   || '';
+      const dbChapter = s.metadata?.surah_number || 0;
+      const dbVerse   = s.metadata?.ayah_number  || 0;
+      // Use Claude's identified ref when DB metadata is missing
+      const ref = refByIndex[s._ctxIdx] || null;
+
+      return {
+        surah_name:  dbName    || ref?.surah_name || '',
+        chapter:     dbChapter || ref?.chapter    || 0,
+        verse:       dbVerse   || ref?.verse      || 0,
+        text:        stripArtifacts(s.content),
+        arabic_text: s.metadata?.arabic_text || '',
+      };
+    });
 
   const seenHadith = new Set();
-  const hadith_sources = sources
-    .filter(s => s.source_type === 'hadith')
+  const hadith_sources = tagged
     .filter(s => {
+      if (s.source_type !== 'hadith') return false;
       const key = `${s.metadata?.book}#${s.metadata?.hadith_number}`;
       if (seenHadith.has(key)) return false;
       seenHadith.add(key);
       return true;
     })
     .map(s => ({
-      book: s.metadata?.book || '',
-      number: s.metadata?.hadith_number || 0,
-      text: stripArtifacts(s.content),
+      book:   s.metadata?.book           || '',
+      number: s.metadata?.hadith_number  || 0,
+      text:   stripArtifacts(s.content),
     }));
 
   return { quran_sources, hadith_sources };
@@ -160,13 +178,19 @@ Rules you must always follow:
 4. Never be judgmental. Teenagers come with honest questions — treat them with respect.
 5. Only say "For a personal fatwa (religious ruling), please ask a qualified scholar" if the question is specifically asking for a legal ruling about a personal situation. For all general knowledge questions, answer fully.
 6. ${langRule}
-7. Format your answer using these section headers (only include sections that are relevant to your response size):
+7. Format your answer using these section headers (only include sections relevant to your response size):
 
 [Direct Answer]
 [Quranic Evidence]
 [Hadith Evidence]
 [Explanation & Tafsir]
 [Real Life Connection]
+
+8. IMPORTANT — after your answer, you MUST add this block. Identify the exact Surah name, chapter number, and verse number for every Quran source listed below, using your knowledge of the Quran:
+<QURAN_REFS>
+[{"index":1,"surah_name":"Al-Baqarah","chapter":2,"verse":255},{"index":2,...}]
+</QURAN_REFS>
+Include ALL Quran sources. If a source covers multiple verses, use the first verse. Use standard English transliterations of Surah names.
 
 Retrieved sources (Quran + Hadith + Tafsir):
 ${context}
@@ -197,7 +221,7 @@ async function runRAG(question, language, responseSize = 'medium') {
 
   // Build prompt using size-aware teenager persona
   const prompt = buildPrompt(question, context, detectedLang, responseSize);
-  const maxTokens = responseSize === 'small' ? 512 : responseSize === 'large' ? 3000 : 1536;
+  const maxTokens = responseSize === 'small' ? 700 : responseSize === 'large' ? 3200 : 1800;
 
   // Call Claude
   const message = await anthropic.messages.create({
@@ -205,9 +229,18 @@ async function runRAG(question, language, responseSize = 'medium') {
     max_tokens: maxTokens,
     messages: [{ role: 'user', content: prompt }],
   });
-  const answer = message.content[0].text;
+  const rawAnswer = message.content[0].text;
 
-  const { quran_sources, hadith_sources } = parseAnswer(answer, sources);
+  // Parse the QURAN_REFS annotation block Claude adds
+  let quranRefs = [];
+  const refsMatch = rawAnswer.match(/<QURAN_REFS>([\s\S]*?)<\/QURAN_REFS>/);
+  if (refsMatch) {
+    try { quranRefs = JSON.parse(refsMatch[1].trim()); } catch {}
+  }
+  // Strip the refs block from the answer shown to users
+  const answer = rawAnswer.replace(/<QURAN_REFS>[\s\S]*?<\/QURAN_REFS>/g, '').trim();
+
+  const { quran_sources, hadith_sources } = parseAnswer(answer, sources, quranRefs);
 
   return {
     answer,
