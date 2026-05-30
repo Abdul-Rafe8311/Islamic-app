@@ -1,9 +1,23 @@
-import { createClient } from '@supabase/supabase-js';
+import { createClient, SupabaseClient } from '@supabase/supabase-js';
 
-const url = process.env.NEXT_PUBLIC_SUPABASE_URL!;
-const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!;
+let _client: SupabaseClient | null = null;
 
-export const supabase = createClient(url, key);
+export function getSupabase(): SupabaseClient | null {
+  if (typeof window === 'undefined') return null; // never run on server/build
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  if (!url || !key) return null;
+  if (!_client) _client = createClient(url, key);
+  return _client;
+}
+
+export const supabase = new Proxy({} as SupabaseClient, {
+  get(_t, prop) {
+    const client = getSupabase();
+    if (!client) return () => ({ data: null, error: new Error('No Supabase client') });
+    return (client as unknown as Record<string, unknown>)[prop as string];
+  },
+});
 
 export interface SavedAnswer {
   id: string;
