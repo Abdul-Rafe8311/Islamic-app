@@ -207,6 +207,19 @@ function ChatContent() {
         })}
 
         {loading && <SkeletonLoader />}
+
+        {/* Disclaimer — shown after answers */}
+        {messages.length > 0 && !loading && (
+          <div className="px-4 pt-3 pb-1">
+            <div className="max-w-2xl mx-auto flex items-center gap-2.5 bg-amber-50/80 dark:bg-amber-900/15 border border-amber-200/60 dark:border-amber-700/30 rounded-xl px-4 py-2.5">
+              <span className="text-amber-500 text-base shrink-0">⚠️</span>
+              <p className="text-[11px] text-amber-700 dark:text-amber-300/80 leading-relaxed">
+                Not a fatwa service. For religious rulings, consult a qualified Islamic scholar (Mufti).
+              </p>
+            </div>
+          </div>
+        )}
+
         <div ref={bottomRef} />
       </div>
 
